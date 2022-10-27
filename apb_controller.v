@@ -1,0 +1,267 @@
+/* APB Controller
+	Input Signals
+                  hclk					//Global Clock Signal whose rising edge is used to sample all transfers
+						hresetn				//Active Low Signal Global Rest Signal
+						hwrite  				//WRITE/READ(0/1) Access of AHB (transfer direction)
+						hwritereg		//
+						haddr		[31:0]	//AHB Address
+						haddr_1  [31:0]	//AHB 1st stage Pipeline Address
+						haddr_2  [31:0]	//AHB 2nd stage pipeline Address
+					   hwdata	[31:0]	//AHB Write Data	
+						hwdata_1 [31:0]	//AHB 1st stage Write Data
+						hwdata_2 [31:0]	//AHB 2nd Stage Write Data				   
+						valid 				//signal generated when memory,hreadyin and htrans are are mutually inclusive.
+						tempselx	[2:0]    //Activation of each peripheral bus slave
+						prdata	[31:0]	//
+	OutPut Signals
+						pwrite				//WRITE/READ(1/0) Access of APB (transfer direction)
+						penable				//used to time all accesses on the peripheral bus
+						pselx		[2:0]		//this signal indicates that the slave device is selected and a data transfer is required.
+						hreadyout			//
+						paddr 	[31:0]	// APB Address bus
+						pwdata   [31:0]	// write data bus driven by peripherla bus bridge unit
+						
+						*/
+ 
+
+module apb_controller( input hclk, hresetn, hwrite, valid, hwrite_reg_1,hwrite_reg_2,
+							  input  [31:0] haddr, haddr_1, haddr_2, hwdata, hwdata_1, hwdata_2, prdata,
+							  input  [2:0] temp_selx,
+							  output reg [31:0] paddr, pwdata,
+							  output reg pwrite, penable, hreadyout,
+							  output reg [2:0] pselx);
+							  
+							  parameter ST_IDLE 		= 3'b000, 	// during this state Pwrite drives the last value, Psel and Penable lines are low
+											ST_READ 		= 3'b001,	// address id decoded and driven onto Paddr relevant Psel is high and Pwrite is driven low, while in this state AHB transfer doe not complete until APB read data has been driven onto HRDATA
+											ST_RENABLE  = 3'b010,	// the penable output is driven high enabling current APB transfer
+											ST_WENABLE  = 3'b011,	// suring this state PENABLE output is driven HIGH, enabling the current APB transfer
+											ST_WRITE    = 3'b100,	// address is decoded and driven onto PADDR , the relevant PSEL line is driven HIGH and PWRITE is driven HIGH
+											ST_WWAIT    = 3'b101,	// this state is neede due to pipelined structure of AHB transfers, to allow AHB side of write transfer to complete so write data becomes available on HWDATA
+											ST_WRITEP   = 3'b110,	// address is decoded and driven onto PADDR , the relevant PSEL line is driven high and PWRITE is driven HIGH.
+											ST_WENABLEP = 3'b111;	// a wait state is inserted if the pending transfer ia a read, because whena read follows a write an extra wait state must be inserted to allow the write transfer to compleat on the APB before the read is started.
+											
+								reg [2:0] p_state , n_state;
+								reg  penable_temp, pwrite_temp, hreadyout_temp;
+								reg [2:0] pselx_temp;
+								reg [31:0] paddr_temp, pwdata_temp;
+								
+								
+//present state logic 
+
+	always @ (posedge hclk)
+			begin
+				if(!hresetn)
+					p_state <= ST_IDLE;
+				else
+				   p_state <= n_state;
+			 end
+			 
+//next state logic
+
+	 always @ (*)
+		begin
+			n_state = ST_IDLE;
+				case(p_state)
+					ST_IDLE: 
+								begin
+									if(valid == 1 && hwrite == 1)
+									  n_state = ST_WWAIT;
+									 else if (valid ==1 && hwrite ==0)
+									  n_state = ST_READ;
+									 else if(valid == 0)
+									  n_state = ST_IDLE;
+								 end
+					ST_WWAIT:
+								 begin
+									if(valid == 1)
+										n_state = ST_WRITEP;
+									else if(valid == 0)
+										n_state = ST_WRITE;
+								 end
+					ST_READ:
+								n_state = ST_RENABLE;
+					ST_RENABLE:
+									begin
+										if(valid == 1 && hwrite == 0)
+											n_state = ST_READ;
+										else if( valid == 1 && hwrite == 1)
+											n_state = ST_WWAIT;
+										else if (valid ==0)
+											n_state = ST_IDLE;
+									 end
+					ST_WENABLE:
+									begin
+										if(valid ==1 && hwrite == 0)
+											n_state = ST_READ;
+										else if(valid ==0)
+											n_state = ST_IDLE;
+										else if ( valid ==1 && hwrite ==1)
+											n_state = ST_WWAIT;
+									end
+					ST_WRITE: 
+									begin
+										if(valid == 1)
+											n_state = ST_WENABLEP;
+										else if( valid == 0)
+											n_state = ST_WENABLE;
+									end
+					ST_WENABLEP:
+									begin
+										if(valid == 1 && hwrite_reg_1)
+											n_state = ST_WRITEP;
+										else if(hwrite_reg_1 == 0)
+											n_state = ST_READ;
+										else if(valid == 0 && hwrite_reg_1 == 1)
+											n_state = ST_WRITE;
+									end
+					ST_WRITEP:
+									n_state = ST_WENABLEP;
+					default: n_state = ST_IDLE;
+			 endcase
+			 end
+			
+always @ (*)
+		begin
+			case(p_state)
+				
+				ST_IDLE:
+									begin
+										if(valid == 1 && hwrite ==0)					// ST_READ state
+											begin
+												paddr_temp = haddr;						// during idle state haddr should be sent to the pipeline so that paddr has the address in the next cycle
+												pwrite_temp = hwrite;					// during idle state the write signal is sent to the pipeline
+												pselx_temp = temp_selx;					// during the second clock cycle when address conditions are met the psel is toggled high
+												penable_temp=0;							// this penable signal sdenotes second cycle of the APB transfer
+												hreadyout_temp = 0;						// when hready is high it denotes successful transfer of the data
+											end
+										else if (valid == 1 && hwrite ==1)			// ST_WWAIT state
+											begin
+												pselx_temp = 0;								// 
+												penable_temp = 0;
+												hreadyout_temp = 1;
+											end
+										else 
+											begin
+												pselx_temp = 0;
+												penable_temp = 0;
+												hreadyout_temp = 1;
+											end
+									end
+				ST_READ:	
+										begin
+											penable_temp = 1;
+											hreadyout_temp = 1;
+										end
+				ST_RENABLE:
+										begin
+											if (valid == 1 && hwrite == 0)			// ST_READ
+												begin
+													paddr_temp = haddr;
+													pwrite_temp = hwrite;
+													pselx_temp = temp_selx;
+													penable_temp = 0;
+													hreadyout_temp = 0;
+												end
+											else if (valid ==1 && hwrite == 1)		// ST_WWAIT
+												begin
+													pselx_temp = 0;
+													penable_temp = 0;
+													hreadyout_temp = 1;
+												end
+											else
+												begin											// ST_IDLE
+													pselx_temp = 0; 
+													penable_temp = 0;
+													hreadyout_temp = 1;
+												end
+										end
+				ST_WWAIT:
+										begin														// ST_WRITE and ST_WRITEP
+											paddr_temp = haddr_1;							// sending pipelined address to the paddr i.e A1
+											pwdata_temp = hwdata;						// sending the data i.e D1
+											pwrite_temp = hwrite;						// Writing the data
+											pselx_temp = temp_selx;						// denotes successful determination of the address
+											penable_temp = 0;								// this penable signal sdenotes second cycle of the APB transfer
+											hreadyout_temp = 0;						// when hready is high it denotes successful transfer of the data
+										end
+				ST_WRITE:
+										begin
+											penable_temp = 1;								// ST_WENABLE and ST_WENABLEP
+											hreadyout_temp = 1;
+										end
+				ST_WENABLEP:
+										begin	
+											if(valid == 1 && hwrite_reg_1 ==1)
+												begin												// SST_WRITEP
+													paddr_temp = haddr_1;
+													pwrite_temp = 1;
+													pselx_temp = temp_selx;
+													penable_temp = 0;
+													pwdata_temp = hwdata;
+													hreadyout_temp = 0;
+												end
+											else if ( valid == 1 && hwrite_reg_1 ==1)
+												begin
+													paddr_temp = haddr;
+													pwrite_temp = hwrite;
+													pselx_temp = temp_selx;
+													penable_temp = 0;
+													hreadyout_temp = 0;
+												end
+										end
+				
+				ST_WENABLE:			
+										begin
+											if(valid == 1 && hwrite ==1)
+												begin
+													hreadyout_temp = 1;
+													pselx_temp		 = 0;
+													penable_temp    = 0;
+												end
+											else if (valid == 1 && hwrite_reg_1 == 0 )
+												begin
+													paddr_temp = haddr;
+													pwrite_temp = hwrite;
+													pselx_temp = temp_selx;
+													penable_temp = 0;
+													hreadyout_temp =0;
+												end
+											else if (valid == 0)
+												begin
+													pselx_temp = 0;
+													penable_temp = 0;
+													hreadyout_temp = 1;
+												end
+										end
+								
+		endcase
+	end
+											
+				
+				
+			 
+			 always @(posedge hclk)
+					begin
+						if(!hresetn)
+							begin
+								paddr 		<= 0;
+								pwdata 		<= 0;
+								pwrite 		<= 0;
+								pselx 		<= 0;
+								penable		<= 0;
+								hreadyout	<= 1;
+							end
+						else
+							begin
+								paddr			<= paddr_temp;
+								pwdata		<= pwdata_temp;
+								pwrite		<= pwrite_temp;
+								pselx 		<= pselx_temp;
+								penable		<= penable_temp;
+								hreadyout	<= hreadyout_temp;
+							end
+					end
+endmodule
+									
+								 
+								 					  

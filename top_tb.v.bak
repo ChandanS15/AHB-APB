@@ -1,0 +1,49 @@
+module top_tb ();
+
+							reg hclk, hresetn;
+						   wire hwrite, hreadyin;
+							wire [1:0] htrans;
+							wire [31:0]  prdata;
+							wire hreadyout, penable, pwrite;
+							wire [1:0] hresp;
+							wire [31:0] hrdata, paddr, pwdata, hwdata , haddr;
+							wire [2:0] pselx;
+
+
+							
+							
+							 ahb_master ahb 		( .hclk(hclk) , .hresetn(hresetn) , .hreadyout(hreadyout) , .hrdata(hrdata) , .hresp(hresp) , .hwrite(hwrite) , .hreadyin(hreadyin), 
+														  .haddr(haddr), .hwdata(hwdata) , .htrans(htrans) );
+						 
+						    bridge_top  bridge	( .hclk(hclk) , .hresetn(hresetn), .hwrite(hwrite), .hreadyin(hreadyin) , .htrans(htrans) , .hwdata(hwdata) , .haddr(haddr), .prdata(prdata),
+														  .hreadyout(hreadyout) , .penable(penable), .pwrite(pwrite) , .hresp(hresp), .hrdata(hrdata) , .paddr(paddr), .pwdata(pwdata), .pselx(pselx) );
+													
+							 apb_interface  apb 	( .hclk(hclk) , .hresetn(hresetn) , .pwrite(pwrite) , .penable(penable) , .pselx(pselx) , .paddr(paddr) , .pwdata(pwdata) , .pwriteout(pwriteout) ,
+															.penableout(penableout) , .pselx_out(pselx_out) , .paddr_out(paddr_out) , .pwdata_out(pwdata_out) , .prdata(prdata) );
+													
+													
+													
+													
+		initial begin
+			hclk = 1'b0;
+			forever #10 hclk = ~hclk;
+			end
+			
+			
+			task reset;
+				begin
+					@ (negedge hclk);
+					hresetn = 1'b1;
+					@ (negedge hclk);
+					hresetn = 1'b0;
+					end
+			endtask
+			
+			initial begin
+			reset;
+			ahb.single_write();
+			//ahb.single_read();
+			end
+			endmodule
+					
+					

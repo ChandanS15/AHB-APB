@@ -1,0 +1,14 @@
+// AHB MAster
+
+	
+module ahb_master (input 		hclk,
+										hresetn,
+										hreadyout,
+						 input [31:0] hrdata,
+						 input [1:0] hresp,
+						 output reg hwrite, hreadyin, 
+						 output reg [31:0] haddr, hwdata,
+						 output reg [1:0] htrans );
+
+						 
+						 
